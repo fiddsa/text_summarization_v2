@@ -11,4 +11,5 @@ def auto_model():
         head_dim=config.HEAD_DIM,
         expansion_factor=config.EXPANSION_FACTOR,
         num_layers=config.NUM_LAYERS,
-    )).to("cuda")
+        use_rope=getattr(config, "USE_ROPE", True),
+    ))

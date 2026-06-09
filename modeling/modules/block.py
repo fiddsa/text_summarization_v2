@@ -1,103 +1,81 @@
-import torch
 import torch.nn as nn
-import torch.nn.functional as F
-import math
-from typing import Tuple
 
-from modeling.modules.rms_norm import RMSNorm
 from modeling.modules.attention import MHA, CrossMHA
-from modeling.modules.feed_forward import SwiGLU
+from modeling.modules.feed_forward import FeedForward
+
 
 class BiBlock(nn.Module):
+    """Transformer encoder block: self-attention + FFN + residual + LayerNorm."""
+
     def __init__(
         self,
         model_dim: int = 512,
         head_dim: int = 64,
-        expansion_factor: int = 2,
-        dropout_rate: float = 0.15,
+        expansion_factor: int = 4,
+        dropout_rate: float = 0.1,
+        use_rope: bool = True,
     ):
         super().__init__()
+        ff_hidden_dim = model_dim * expansion_factor
 
-        self.norm1 = RMSNorm(model_dim)
-        self.norm2 = RMSNorm(model_dim)
-        self.mha = MHA(model_dim, head_dim, is_causal=False)
-        self.ffn = SwiGLU(model_dim, model_dim * expansion_factor)
+        self.mha = MHA(
+            model_dim,
+            head_dim,
+            is_causal=False,
+            dropout_rate=dropout_rate,
+            use_rope=use_rope,
+        )
+        self.ffn = FeedForward(model_dim, ff_hidden_dim, dropout_rate=dropout_rate)
+
+        self.norm1 = nn.LayerNorm(model_dim)
+        self.norm2 = nn.LayerNorm(model_dim)
         self.dropout = nn.Dropout(dropout_rate)
 
     def forward(self, hidden_states, attention_mask):
-        """
-        Args:
-            hidden_states: (batch_size, seq_len, model_dim)
-            attention_mask: (batch_size, seq_len)
-        
-        Returns: 
-            hidden_states: (batch_size, seq_len, model_dim)
-        """
+        attn_out, _, _ = self.mha(hidden_states, attention_mask)
+        hidden_states = self.norm1(hidden_states + self.dropout(attn_out))
 
-        res = hidden_states
-        hidden_states = self.norm1(hidden_states)
-        hidden_states, _, _ = self.mha(hidden_states, attention_mask)
-        hidden_states = res + self.dropout(hidden_states)
-
-        res = hidden_states
-        hidden_states = self.norm2(hidden_states)
-        hidden_states = self.ffn(hidden_states)
-        hidden_states = res + self.dropout(hidden_states)
-        
+        ffn_out = self.ffn(hidden_states)
+        hidden_states = self.norm2(hidden_states + self.dropout(ffn_out))
         return hidden_states
 
+
 class CrossBlock(nn.Module):
+    """Transformer decoder block: causal self-attn + cross-attn + FFN."""
+
     def __init__(
-        self,         
+        self,
         model_dim: int = 512,
         head_dim: int = 64,
-        expansion_factor: int = 2,
-        dropout_rate: float = 0.15
+        expansion_factor: int = 4,
+        dropout_rate: float = 0.1,
+        use_rope: bool = True,
     ):
         super().__init__()
+        ff_hidden_dim = model_dim * expansion_factor
 
-        self.norm1 = RMSNorm(model_dim)
-        self.norm2 = RMSNorm(model_dim)
-        self.norm3 = RMSNorm(model_dim)
-        self.mha = MHA(model_dim, head_dim, is_causal=True)
-        self.cross_mha = CrossMHA(model_dim, head_dim)
-        self.ffn = SwiGLU(model_dim, model_dim * expansion_factor)
+        self.mha = MHA(
+            model_dim,
+            head_dim,
+            is_causal=True,
+            dropout_rate=dropout_rate,
+            use_rope=use_rope,
+        )
+        self.cross_mha = CrossMHA(model_dim, head_dim, dropout_rate=dropout_rate)
+        self.ffn = FeedForward(model_dim, ff_hidden_dim, dropout_rate=dropout_rate)
+
+        self.norm1 = nn.LayerNorm(model_dim)
+        self.norm2 = nn.LayerNorm(model_dim)
+        self.norm3 = nn.LayerNorm(model_dim)
         self.dropout = nn.Dropout(dropout_rate)
-    
+
     def forward(self, hidden_states, context, context_attention_mask):
-        res = hidden_states
-        hidden_states = self.norm1(hidden_states)
-        hidden_states, k, v = self.mha(hidden_states, attention_mask=None)
-        hidden_states = res + self.dropout(hidden_states)
+        self_attn_out, k, v = self.mha(hidden_states, attention_mask=None)
+        hidden_states = self.norm1(hidden_states + self.dropout(self_attn_out))
 
-        res = hidden_states
-        hidden_states = self.norm2(hidden_states)
-        hidden_states = self.cross_mha(hidden_states, context, context_attention_mask)
-        hidden_states = res + self.dropout(hidden_states)
+        cross_attn_out = self.cross_mha(hidden_states, context, context_attention_mask)
+        hidden_states = self.norm2(hidden_states + self.dropout(cross_attn_out))
 
-        res = hidden_states
-        hidden_states = self.norm3(hidden_states)
-        hidden_states = self.ffn(hidden_states)
-        hidden_states = res + self.dropout(hidden_states)
-
+        ffn_out = self.ffn(hidden_states)
+        hidden_states = self.norm3(hidden_states + self.dropout(ffn_out))
         return hidden_states, k, v
-    
-    def step(self, hidden_states, context, context_attention_mask, k_cache, v_cache):
-        res = hidden_states
-        hidden_states = self.norm1(hidden_states)
-        hidden_states, k_cache, v_cache = self.mha.step(hidden_states, k_cache, v_cache)
-        hidden_states = res + hidden_states
-
-        res = hidden_states
-        hidden_states = self.norm2(hidden_states)
-        hidden_states = hidden_states.unsqueeze(1)
-        hidden_states = self.cross_mha(hidden_states, context, context_attention_mask)
-        hidden_states = hidden_states.squeeze(1)
-        hidden_states = res + hidden_states
-
-        res = hidden_states
-        hidden_states = self.norm3(hidden_states)
-        hidden_states = self.ffn(hidden_states)
-        hidden_states = res + hidden_states
-        
-        return hidden_states, k_cache, v_cache

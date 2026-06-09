@@ -1,12 +1,17 @@
 import torch.nn as nn
-import torch.nn.functional as F
 
-class SwiGLU(nn.Module):
-    def __init__(self, dim, hidden_dim):
+
+class FeedForward(nn.Module):
+    """Position-wise feed-forward network from the original Transformer."""
+
+    def __init__(self, dim: int, hidden_dim: int, dropout_rate: float = 0.1):
         super().__init__()
-        self.w1 = nn.Linear(dim, hidden_dim)
-        self.w2 = nn.Linear(dim, hidden_dim)
-        self.out = nn.Linear(hidden_dim, dim)
+        self.net = nn.Sequential(
+            nn.Linear(dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout_rate),
+            nn.Linear(hidden_dim, dim),
+        )
 
     def forward(self, x):
-        return self.out(self.w1(x) * F.silu(self.w2(x)))
+        return self.net(x)

@@ -26,13 +26,10 @@ WARMUP_STEPS = 4000  # number of warmup steps for LR scheduler
 TYPE="seq2seq"
 MODEL_DIM = 256
 HEAD_DIM = 8
-EXPANSION_FACTOR = 2
+EXPANSION_FACTOR = 4
 NUM_LAYERS = 4
 
 # Infer config
 MAX_NEW_TOKENS = 150
 PREDS_PATH = "preds.csv"
 
-# Beam search config
-BEAM_SIZE = 4           # number of beams (1 = greedy)
-BEAM_LENGTH_PENALTY = 0.6  # alpha in length penalty: score /= len(seq)^alpha

@@ -8,24 +8,16 @@ from modeling.models import auto_model
 import config
 from evaluation.metrics import compute_rouge, compute_bleu, compute_bertscore
 
-def _generate_preds_seq2seq(model, tokenizer, data_loader):
+def _generate_preds_seq2seq(model, tokenizer, data_loader, device):
     all_inputs = []
     all_preds = []
     all_refs = []
 
     for batch in tqdm(data_loader, desc="Test"):
-        input_ids = batch["input_ids"].to("cuda")
-        target_ids = batch["target_ids"].to("cuda")
+        input_ids = batch["input_ids"].to(device)
+        target_ids = batch["target_ids"].to(device)
 
-        if config.BEAM_SIZE > 1:
-            seq_ids = model.beam_search(
-                input_ids,
-                max_new_tokens=config.MAX_NEW_TOKENS,
-                beam_size=config.BEAM_SIZE,
-                length_penalty=config.BEAM_LENGTH_PENALTY,
-            ).cpu()
-        else:
-            seq_ids = model.generate(input_ids, config.MAX_NEW_TOKENS).cpu()
+        seq_ids = model.generate(input_ids, config.MAX_NEW_TOKENS).cpu()
         input_ids = input_ids.cpu()
         target_ids = target_ids.cpu()
 
@@ -47,12 +39,12 @@ def _generate_preds_seq2seq(model, tokenizer, data_loader):
 def _generate_preds():
     tokenizer = Tokenizer()
     test_loader = auto_dataloader(tokenizer, "test")
-    device = "cuda"
-    model = auto_model()
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = auto_model().to(device)
     model.load_state_dict(torch.load(config.BEST_MODEL_PATH, map_location=device))
     model.eval()
 
-    return _generate_preds_seq2seq(model, tokenizer, test_loader)
+    return _generate_preds_seq2seq(model, tokenizer, test_loader, device)
 
 def _write_preds(all_inputs, all_preds, all_refs):
     df = pd.DataFrame({

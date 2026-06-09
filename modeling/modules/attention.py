@@ -11,7 +11,7 @@ def rotate_half(x):
 def build_rope_cache(seq_len_or_positions, dim, device, mode="seq"):
     """
     if mode == "seq":
-        Returns: 
+        Returns:
             cos, sin: (seq_len, dim)
 
     if mode == "pos":
@@ -29,7 +29,7 @@ def build_rope_cache(seq_len_or_positions, dim, device, mode="seq"):
         angles = torch.einsum("i,j->ij", pos, freq)
     elif mode == 'pos':
         positions = seq_len_or_positions.float()
-        angles = positions.unsqueeze(-1) * freq.unsqueeze(0) 
+        angles = positions.unsqueeze(-1) * freq.unsqueeze(0)
     else:
         raise ValueError(f"Unsupported mode: {mode}")
 
@@ -69,6 +69,8 @@ class MHA(nn.Module):
         self.k_proj = nn.Linear(dim, dim)
         self.v_proj = nn.Linear(dim, dim)
 
+        self.gate_proj = nn.Linear(dim, dim)
+
         self.out_proj = nn.Linear(dim, dim)
 
     def forward(self, hidden_states, attention_mask):
@@ -76,7 +78,7 @@ class MHA(nn.Module):
         Args:
             hidden_states: (batch_size, seq_len, dim)
             attention_mask: (batch_size, seq_len)
-        
+
         Returns:
             hidden_states: (batch_size, seq_len, dim)
         """
@@ -85,6 +87,7 @@ class MHA(nn.Module):
         q = self.q_proj(hidden_states)
         k = self.k_proj(hidden_states)
         v = self.v_proj(hidden_states)
+        gate = torch.sigmoid(self.gate_proj(hidden_states))
 
         q = q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
@@ -103,7 +106,7 @@ class MHA(nn.Module):
             attn_score = attn_score.masked_fill(~causal_mask, float("-inf"))
 
         if attention_mask is not None:
-            attn_score = attn_score.masked_fill(~attention_mask[:, None, None, :], float("-inf"))            
+            attn_score = attn_score.masked_fill(~attention_mask[:, None, None, :], float("-inf"))
 
         attn_weight = F.softmax(attn_score, dim=-1)
 
@@ -111,14 +114,14 @@ class MHA(nn.Module):
 
         out = out.transpose(1, 2).contiguous().view(batch_size, seq_len, self.dim)
 
-        return self.out_proj(out), k, v
+        return self.out_proj(out * gate), k, v
 
     def step(self, hidden_states, k_cache, v_cache):
         """
         Args:
             hidden_states: (batch_size, model_dim)
             k_cache, v_cache: (batch_size, num_heads, seq_len, head_dim)
-        
+
         Returns:
             hidden_states: (batch_size, model_dim)
             k, v: (batch_size, num_heads, seq_len + 1, head_dim)
@@ -133,6 +136,7 @@ class MHA(nn.Module):
         q = self.q_proj(hidden_states)
         k = self.k_proj(hidden_states)
         v = self.v_proj(hidden_states)
+        gate = torch.sigmoid(self.gate_proj(hidden_states))
 
         q = q.view(batch_size, 1, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.view(batch_size, 1, self.num_heads, self.head_dim).transpose(1, 2)
@@ -151,7 +155,7 @@ class MHA(nn.Module):
         out = attn_score @ v
         out = out.transpose(1, 2).contiguous().view(batch_size, self.dim)
 
-        return self.out_proj(out), k, v
+        return self.out_proj(out * gate), k, v
 
 
 class CrossMHA(nn.Module):
@@ -167,6 +171,8 @@ class CrossMHA(nn.Module):
         self.q_proj = nn.Linear(dim, dim)
         self.k_proj = nn.Linear(dim, dim)
         self.v_proj = nn.Linear(dim, dim)
+
+        self.gate_proj = nn.Linear(dim, dim)
 
         self.out_proj = nn.Linear(dim, dim)
 
@@ -184,6 +190,7 @@ class CrossMHA(nn.Module):
         q = self.q_proj(hidden_states)
         k = self.k_proj(context)
         v = self.v_proj(context)
+        gate = torch.sigmoid(self.gate_proj(hidden_states))
 
         q = q.view(batch_size, seq_len, self.num_heads, self.head_dim).transpose(1, 2)
         k = k.view(batch_size, context_len, self.num_heads, self.head_dim).transpose(1, 2)
@@ -202,4 +209,4 @@ class CrossMHA(nn.Module):
 
         out = out.transpose(1, 2).contiguous().view(batch_size, -1, self.dim)
 
-        return self.out_proj(out)
+        return self.out_proj(out  * gate)
